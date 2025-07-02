@@ -1,0 +1,55 @@
+# 自媒体运营工具 - 依赖包列表
+
+# Web框架
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+streamlit==1.28.1
+
+# 数据库
+sqlalchemy==2.0.23
+
+# 数据处理
+pandas==2.1.3
+numpy==1.24.3
+
+# HTTP请求
+requests==2.31.0
+
+# AI模型集成
+openai==1.3.6
+# dashscope  # 阿里通义千问SDK，按需安装
+
+# 数据验证
+pydantic==2.5.0
+pydantic-settings==2.1.0
+
+# 日志管理
+loguru==0.7.2
+
+# 环境变量管理
+python-dotenv==1.0.0
+
+# 时间处理
+python-dateutil==2.8.2
+
+# 字符串处理
+jieba==0.42.1
+
+# 网络爬虫（后续使用）
+# scrapy==2.11.0
+# selenium==4.15.2
+# beautifulsoup4==4.12.2
+
+# 图像处理（后续使用）
+# pillow==10.1.0
+
+# 可视化（后续使用）
+# matplotlib==3.8.2
+# plotly==5.17.0
+
+# 任务调度（后续使用）
+# apscheduler==3.10.4
+
+# 测试工具
+pytest==7.4.3
+pytest-asyncio==0.21.1 
