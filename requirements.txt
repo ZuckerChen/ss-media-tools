@@ -35,10 +35,10 @@ python-dateutil==2.8.2
 # 字符串处理
 jieba==0.42.1
 
-# 网络爬虫（后续使用）
-# scrapy==2.11.0
-# selenium==4.15.2
-# beautifulsoup4==4.12.2
+# 网络爬虫
+beautifulsoup4==4.12.2
+# scrapy==2.11.0  # 高级爬虫框架（后续使用）
+# selenium==4.15.2  # 浏览器自动化（后续使用）
 
 # 图像处理（后续使用）
 # pillow==10.1.0

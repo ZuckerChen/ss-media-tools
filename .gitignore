@@ -82,6 +82,9 @@ celerybeat-schedule
 
 # Environments
 .env
+.env.local
+.env.development
+.env.production
 .venv
 env/
 venv/
@@ -114,6 +117,11 @@ logs/
 *.db
 *.sqlite
 *.sqlite3
+
+# API Keys and sensitive data
+config_local.py
+secrets.json
+api_keys.txt
 
 # IDE
 .vscode/

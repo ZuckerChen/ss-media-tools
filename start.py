@@ -48,7 +48,7 @@ def start_backend():
     subprocess.run([
         sys.executable, "-m", "uvicorn", 
         "main:app", 
-        "--host", "0.0.0.0", 
+        "--host", "127.0.0.1", 
         "--port", "8000", 
         "--reload"
     ])
@@ -60,7 +60,7 @@ def start_frontend():
         sys.executable, "-m", "streamlit", 
         "run", "app.py", 
         "--server.port", "8501",
-        "--server.address", "0.0.0.0"
+        "--server.address", "127.0.0.1"
     ])
 
 def main():

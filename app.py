@@ -61,7 +61,7 @@ def format_datetime(dt_str: str) -> str:
 st.sidebar.title("🚀 自媒体运营工具")
 page = st.sidebar.selectbox(
     "选择功能模块",
-    ["🏠 首页", "🤖 AI模型管理", "✍️ 内容创作", "📝 草稿管理", "🚀 发布管理", "📊 使用统计"]
+    ["🏠 首页", "🤖 AI模型管理", "✍️ 内容创作", "📝 草稿管理", "🚀 发布管理", "🔥 热点分析", "📊 使用统计"]
 )
 
 # 首页
@@ -128,7 +128,7 @@ elif page == "🤖 AI模型管理":
             
             with col1:
                 name = st.text_input("配置名称", placeholder="例如: 我的GPT模型")
-                provider = st.selectbox("提供商", ["openai", "baidu", "dashscope", "tencent"])
+                provider = st.selectbox("提供商", ["deepseek", "openai", "baidu", "dashscope", "tencent"])
                 api_key = st.text_input("API密钥", type="password")
             
             with col2:
@@ -853,69 +853,641 @@ elif page == "🚀 发布管理":
             st.error("无法获取统计数据")
 
 
+# 热点分析页面
+elif page == "🔥 热点分析":
+    st.title("🔥 热点分析")
+    
+    # 标签页
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 热点监控", "🎯 关键词分析", "📊 数据统计", "⚙️ 抓取设置"])
+    
+    # 热点监控标签页
+    with tab1:
+        st.subheader("📈 实时热点监控")
+        
+        # 筛选选项
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            platform_filter = st.selectbox("平台筛选", ["全部", "weibo", "zhihu", "toutiao"])
+        with col2:
+            category_filter = st.selectbox("分类筛选", ["全部", "综合", "知识", "娱乐", "科技"])
+        with col3:
+            hours_filter = st.selectbox("时间范围", [24, 48, 72, 168], format_func=lambda x: f"最近{x}小时")
+        with col4:
+            limit_filter = st.selectbox("显示数量", [20, 50, 100])
+        
+        # 获取热点数据
+        params = {
+            "hours": hours_filter,
+            "limit": limit_filter
+        }
+        if platform_filter != "全部":
+            params["platform"] = platform_filter
+        if category_filter != "全部":
+            params["category"] = category_filter
+        
+        # 构建查询字符串
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        topics_result = call_api(f"/api/hotspot/topics?{query_string}")
+        
+        if topics_result["success"]:
+            topics_data = topics_result["data"]
+            topics = topics_data.get("topics", [])
+            
+            if topics:
+                st.write(f"共找到 {len(topics)} 个热点话题")
+                
+                # 显示热点列表
+                for i, topic in enumerate(topics):
+                    with st.container():
+                        col1, col2, col3 = st.columns([6, 2, 2])
+                        
+                        with col1:
+                            # 标题和描述
+                            st.markdown(f"**#{topic['rank_position']} {topic['title']}**")
+                            if topic.get('description'):
+                                st.markdown(f"*{topic['description'][:100]}...*" if len(topic['description']) > 100 else f"*{topic['description']}*")
+                            
+                            # 关键词标签
+                            if topic.get('keywords'):
+                                keywords = topic['keywords'].split(',')[:5]  # 显示前5个关键词
+                                keyword_tags = " ".join([f"`{kw.strip()}`" for kw in keywords if kw.strip()])
+                                st.markdown(keyword_tags)
+                        
+                        with col2:
+                            # 平台和分类
+                            platform_emoji = {"weibo": "🐱", "zhihu": "🤔", "toutiao": "📰"}
+                            st.markdown(f"{platform_emoji.get(topic['platform'], '📱')} {topic['platform']}")
+                            st.markdown(f"📂 {topic['category']}")
+                            
+                            # 情感倾向
+                            sentiment_emoji = {"positive": "😊", "negative": "😞", "neutral": "😐"}
+                            st.markdown(f"{sentiment_emoji.get(topic['sentiment'], '😐')} {topic['sentiment']}")
+                        
+                        with col3:
+                            # 热度分数
+                            st.metric("热度分数", f"{topic['hot_score']:.1f}")
+                            
+                            # 互动数据
+                            if topic.get('engagement_count', 0) > 0:
+                                st.metric("互动量", f"{topic['engagement_count']:,}")
+                            
+                            # 时间
+                            created_time = topic.get('created_at', '')
+                            if created_time:
+                                st.markdown(f"🕒 {format_datetime(created_time)}")
+                        
+                        # 操作按钮
+                        col_btn1, col_btn2 = st.columns(2)
+                        with col_btn1:
+                            if st.button(f"💡 生成创意", key=f"idea_{topic['id']}"):
+                                st.session_state[f"generate_idea_{topic['id']}"] = True
+                        with col_btn2:
+                            if st.button(f"✍️ 创作内容", key=f"create_{topic['id']}"):
+                                st.session_state[f"create_content_{topic['id']}"] = True
+                        
+                        # 处理生成创意
+                        if st.session_state.get(f"generate_idea_{topic['id']}", False):
+                            with st.spinner("AI正在分析热点并生成创意..."):
+                                # 获取可用的AI模型
+                                configs_result = call_api("/api/ai/configs")
+                                if configs_result["success"]:
+                                    active_configs = [c for c in configs_result["data"] if c["is_active"]]
+                                    if active_configs:
+                                        config_id = active_configs[0]["id"]  # 使用第一个活跃配置
+                                        
+                                        # 生成创意
+                                        idea_data = {
+                                            "topic": topic['title'],
+                                            "platform": "通用",
+                                            "style": "专业",
+                                            "requirements": f"基于热点话题：{topic['title']}，生成3-5个创作角度和内容方向建议",
+                                            "config_id": config_id
+                                        }
+                                        
+                                        idea_result = call_api("/api/content/title", "POST", idea_data)
+                                        if idea_result["success"]:
+                                            st.success("创意生成成功！")
+                                            st.markdown("### 💡 创作建议：")
+                                            st.markdown(idea_result["data"]["titles"])
+                                        else:
+                                            st.error(f"创意生成失败: {idea_result.get('error', '未知错误')}")
+                                    else:
+                                        st.error("没有可用的AI模型配置")
+                                else:
+                                    st.error("无法获取AI模型配置")
+                            
+                            # 重置状态
+                            st.session_state[f"generate_idea_{topic['id']}"] = False
+                        
+                        st.divider()
+                
+                # 分页（简化版本）
+                if len(topics) >= limit_filter:
+                    st.info(f"显示了前 {limit_filter} 个热点，调整显示数量可查看更多")
+            else:
+                st.info("暂无热点数据，请先执行数据抓取")
+        else:
+            st.error("获取热点数据失败")
+    
+    # 关键词分析标签页
+    with tab2:
+        st.subheader("🎯 热门关键词分析")
+        
+        # 获取关键词数据
+        col1, col2 = st.columns(2)
+        with col1:
+            keyword_hours = st.selectbox("分析时间范围", [24, 48, 72, 168], format_func=lambda x: f"最近{x}小时", key="keyword_hours")
+        with col2:
+            keyword_limit = st.selectbox("关键词数量", [10, 20, 50], key="keyword_limit")
+        
+        keywords_result = call_api(f"/api/hotspot/keywords?hours={keyword_hours}&limit={keyword_limit}")
+        
+        if keywords_result["success"]:
+            keywords_data = keywords_result["data"]["keywords"]
+            
+            if keywords_data:
+                st.write(f"发现 {len(keywords_data)} 个热门关键词")
+                
+                # 关键词排行榜
+                st.subheader("🏆 关键词排行榜")
+                
+                for i, kw in enumerate(keywords_data):
+                    col1, col2, col3, col4 = st.columns([1, 3, 2, 2])
+                    
+                    with col1:
+                        st.markdown(f"**#{i+1}**")
+                    with col2:
+                        st.markdown(f"**{kw['keyword']}**")
+                    with col3:
+                        st.metric("出现次数", kw['count'])
+                    with col4:
+                        st.metric("综合热度", f"{kw['total_score']:.1f}")
+                
+                # 关键词云图（使用简单的文本展示）
+                st.subheader("☁️ 关键词概览")
+                keyword_text = " • ".join([f"**{kw['keyword']}**({kw['count']})" for kw in keywords_data[:20]])
+                st.markdown(keyword_text)
+                
+                # 关键词趋势图
+                st.subheader("📈 关键词热度分布")
+                chart_data = {kw['keyword']: kw['total_score'] for kw in keywords_data[:15]}
+                st.bar_chart(chart_data)
+                
+            else:
+                st.info("暂无关键词数据")
+        else:
+            st.error("获取关键词数据失败")
+    
+    # 数据统计标签页
+    with tab3:
+        st.subheader("📊 热点数据统计")
+        
+        # 获取统计数据
+        stats_result = call_api("/api/hotspot/stats")
+        
+        if stats_result["success"]:
+            stats = stats_result["data"]
+            
+            # 总体统计
+            st.subheader("📈 总体概况")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("总热点数", stats["total_topics"])
+            with col2:
+                platform_count = len(stats["platform_stats"])
+                st.metric("活跃平台", platform_count)
+            with col3:
+                category_count = len(stats["category_stats"])
+                st.metric("涉及分类", category_count)
+            with col4:
+                st.metric("时间范围", stats["time_range"])
+            
+            # 平台统计
+            if stats["platform_stats"]:
+                st.subheader("📱 平台分布")
+                platform_data = []
+                for platform, data in stats["platform_stats"].items():
+                    platform_data.append({
+                        "平台": platform,
+                        "热点数量": data["count"],
+                        "平均热度": data["avg_score"]
+                    })
+                
+                df_platform = pd.DataFrame(platform_data)
+                st.dataframe(df_platform, use_container_width=True)
+                
+                # 平台热点数量图表
+                platform_chart = {row["平台"]: row["热点数量"] for _, row in df_platform.iterrows()}
+                st.bar_chart(platform_chart)
+            
+            # 分类统计
+            if stats["category_stats"]:
+                st.subheader("📂 分类分布")
+                category_chart = stats["category_stats"]
+                st.bar_chart(category_chart)
+            
+            # 情感分析统计
+            if stats["sentiment_stats"]:
+                st.subheader("😊 情感倾向分析")
+                sentiment_data = []
+                sentiment_names = {"positive": "正面", "negative": "负面", "neutral": "中性"}
+                
+                for sentiment, count in stats["sentiment_stats"].items():
+                    sentiment_data.append({
+                        "情感倾向": sentiment_names.get(sentiment, sentiment),
+                        "数量": count,
+                        "占比": f"{count/stats['total_topics']*100:.1f}%"
+                    })
+                
+                df_sentiment = pd.DataFrame(sentiment_data)
+                st.dataframe(df_sentiment, use_container_width=True)
+                
+        else:
+            st.error("获取统计数据失败")
+    
+    # 抓取设置标签页
+    with tab4:
+        st.subheader("⚙️ 抓取设置")
+        
+        # 获取支持的平台
+        platforms_result = call_api("/api/hotspot/platforms")
+        
+        if platforms_result["success"]:
+            platforms = platforms_result["data"]["platforms"]
+            
+            # 手动抓取
+            st.subheader("🔄 手动抓取")
+            
+            # 平台选择
+            selected_platforms = []
+            st.write("选择要抓取的平台：")
+            
+            for platform in platforms:
+                if st.checkbox(f"{platform['name']} - {platform['description']}", key=f"platform_{platform['platform']}"):
+                    selected_platforms.append(platform['platform'])
+            
+            # 抓取按钮
+            if st.button("🚀 开始抓取", type="primary"):
+                if selected_platforms:
+                    with st.spinner("正在抓取热点数据..."):
+                        crawl_data = selected_platforms if selected_platforms else None
+                        crawl_result = call_api("/api/hotspot/crawl", "POST", crawl_data)
+                        
+                        if crawl_result["success"]:
+                            st.success("抓取完成！")
+                            
+                            # 显示抓取结果
+                            st.subheader("📊 抓取结果")
+                            
+                            col1, col2 = st.columns(2)
+                            with col1:
+                                st.metric("总抓取数", crawl_result["data"]["total_count"])
+                            with col2:
+                                error_count = len(crawl_result["data"]["errors"])
+                                st.metric("错误数", error_count)
+                            
+                            # 平台详情
+                            for platform, result in crawl_result["data"]["platforms"].items():
+                                with st.expander(f"{platform} 详情"):
+                                    if result["success"]:
+                                        st.success(f"✅ 成功抓取 {result['crawled']} 个热点，保存 {result['saved']} 个")
+                                    else:
+                                        st.error(f"❌ 抓取失败: {result.get('error', '未知错误')}")
+                            
+                            # 错误信息
+                            if crawl_result["data"]["errors"]:
+                                st.subheader("⚠️ 错误信息")
+                                for error in crawl_result["data"]["errors"]:
+                                    st.error(error)
+                        else:
+                            st.error(f"抓取失败: {crawl_result.get('error', '未知错误')}")
+                else:
+                    st.warning("请至少选择一个平台")
+            
+            # 数据清理
+            st.subheader("🧹 数据清理")
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                cleanup_days = st.selectbox("清理天数", [3, 7, 14, 30], index=1)
+            with col2:
+                if st.button("🗑️ 清理旧数据"):
+                    with st.spinner("正在清理数据..."):
+                        cleanup_result = call_api(f"/api/hotspot/cleanup?days={cleanup_days}", "DELETE")
+                        
+                        if cleanup_result["success"]:
+                            st.success(f"✅ {cleanup_result['data']['message']}")
+                        else:
+                            st.error(f"清理失败: {cleanup_result.get('error', '未知错误')}")
+            
+            st.info(f"将清理 {cleanup_days} 天前的热点数据")
+            
+        else:
+            st.error("获取平台信息失败")
+
+
 # 使用统计页面
 elif page == "📊 使用统计":
-    st.title("📊 使用统计")
+    st.title("📊 数据分析与统计")
     
-    # 获取统计数据
-    stats_result = call_api("/api/ai/stats")
+    # 标签页
+    tab1, tab2, tab3, tab4 = st.tabs(["📈 内容表现", "🔥 热点分析", "🤖 AI使用统计", "📋 综合报告"])
     
-    if not stats_result["success"]:
-        st.error("无法获取统计数据")
-        st.stop()
-    
-    stats = stats_result["data"]
-    configs = stats.get("configs", [])
-    
-    # 总体统计
-    st.subheader("📈 总体统计")
-    
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("配置总数", len(configs))
-    with col2:
-        st.metric("活跃配置", len([c for c in configs if c["is_active"]]))
-    with col3:
-        st.metric("总使用次数", stats.get("total_usage", 0))
-    with col4:
-        st.metric("总Token消耗", stats.get("total_tokens", 0))
-    
-    # 配置详细统计
-    if configs:
-        st.subheader("🤖 各模型使用情况")
+    # 内容表现分析标签页
+    with tab1:
+        st.subheader("📈 内容表现分析")
         
-        # 创建DataFrame用于展示
-        df_data = []
-        for config in configs:
-            df_data.append({
-                "名称": config["name"],
-                "提供商": config["provider"],
-                "使用次数": config["usage_count"],
-                "Token消耗": config["total_tokens"],
-                "状态": "✅ 活跃" if config["is_active"] else "❌ 停用",
-                "默认": "⭐ 是" if config["is_default"] else ""
-            })
+        # 筛选选项
+        col1, col2 = st.columns(2)
+        with col1:
+            days_filter = st.selectbox("分析时间范围", [7, 15, 30, 60], index=2, format_func=lambda x: f"最近{x}天")
+        with col2:
+            platform_filter = st.selectbox("平台筛选", ["全部", "weibo", "wechat"], key="content_platform")
         
-        df = pd.DataFrame(df_data)
-        st.dataframe(df, use_container_width=True)
+        # 获取内容分析数据
+        params = {"days": days_filter}
+        if platform_filter != "全部":
+            params["platform"] = platform_filter
         
-        # 使用量图表
-        if any(config["usage_count"] > 0 for config in configs):
-            st.subheader("📊 使用量分布")
+        query_string = "&".join([f"{k}={v}" for k, v in params.items()])
+        content_result = call_api(f"/api/analytics/content?{query_string}")
+        
+        if content_result["success"]:
+            data = content_result["data"]
             
-            # 使用次数柱状图
-            usage_data = {config["name"]: config["usage_count"] for config in configs if config["usage_count"] > 0}
-            if usage_data:
-                st.bar_chart(usage_data)
+            # 总体指标
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("总发布数", data["total_posts"])
+            with col2:
+                st.metric("成功率", f"{data['performance_summary']['success_rate']:.1f}%")
+            with col3:
+                st.metric("失败率", f"{data['performance_summary']['failure_rate']:.1f}%")
+            with col4:
+                st.metric("日均发布", f"{data['performance_summary']['avg_daily_posts']:.1f}")
             
-            # Token消耗饼图（使用Streamlit的内置图表功能的替代方案）
-            token_data = {config["name"]: config["total_tokens"] for config in configs if config["total_tokens"] > 0}
-            if token_data:
-                st.subheader("🥧 Token消耗分布")
-                st.bar_chart(token_data)
+            # 平台表现分析
+            if data["platform_analysis"]:
+                st.subheader("📱 平台表现对比")
+                
+                platform_data = []
+                for platform, stats in data["platform_analysis"].items():
+                    platform_data.append({
+                        "平台": platform,
+                        "发布数": stats["posts"],
+                        "成功率": f"{stats['success_rate']:.1f}%",
+                        "平均浏览": stats["avg_views"],
+                        "平均点赞": stats["avg_likes"],
+                        "平均评论": stats["avg_comments"],
+                        "平均转发": stats["avg_shares"],
+                        "平均互动": stats["avg_engagement"]
+                    })
+                
+                df = pd.DataFrame(platform_data)
+                st.dataframe(df, use_container_width=True)
+            
+            # 最佳发布时间
+            if data["time_analysis"]["best_hours"]:
+                st.subheader("⏰ 最佳发布时间")
+                
+                best_hours = data["time_analysis"]["best_hours"]
+                for i, hour_data in enumerate(best_hours[:3]):
+                    col1, col2, col3 = st.columns([2, 1, 1])
+                    with col1:
+                        st.write(f"**第{i+1}名：{hour_data['hour']}:00**")
+                    with col2:
+                        st.write(f"成功率 {hour_data['success_rate']:.1f}%")
+                    with col3:
+                        st.write(f"平均互动 {hour_data['avg_engagement']:.1f}")
+            
+            # 内容洞察
+            if data["content_insights"]:
+                st.subheader("💡 内容洞察")
+                insights = data["content_insights"]
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("成功发布", insights["total_successful_posts"])
+                    st.info(f"**最佳标题长度：** {insights['best_title_length']}")
+                with col2:
+                    st.metric("失败发布", insights["total_failed_posts"])
+                    if insights["common_failure_reasons"]:
+                        failure_reasons = list(insights["common_failure_reasons"].items())
+                        st.warning(f"**常见失败原因：** {failure_reasons[0][0]} ({failure_reasons[0][1]}次)")
+        else:
+            st.error("无法获取内容分析数据")
     
-    else:
-        st.info("暂无AI模型配置数据")
+    # 热点分析标签页
+    with tab2:
+        st.subheader("🔥 热点趋势分析")
+        
+        days_filter = st.selectbox("分析时间范围", [3, 7, 14], index=1, format_func=lambda x: f"最近{x}天", key="hotspot_days")
+        
+        hotspot_result = call_api(f"/api/analytics/hotspot?days={days_filter}")
+        
+        if hotspot_result["success"]:
+            data = hotspot_result["data"]
+            
+            if data.get("total_topics", 0) > 0:
+                # 总体统计
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("热点话题数", data["total_topics"])
+                with col2:
+                    platform_count = len(data.get("platform_analysis", {}))
+                    st.metric("覆盖平台", platform_count)
+                with col3:
+                    category_count = len(data.get("category_distribution", {}))
+                    st.metric("话题分类", category_count)
+                
+                # 平台分析
+                if data.get("platform_analysis"):
+                    st.subheader("📱 平台热点分布")
+                    
+                    platform_data = []
+                    for platform, stats in data["platform_analysis"].items():
+                        platform_data.append({
+                            "平台": platform,
+                            "热点数量": stats["count"],
+                            "平均热度": stats["avg_score"]
+                        })
+                    
+                    df = pd.DataFrame(platform_data)
+                    st.dataframe(df, use_container_width=True)
+                
+                # 分类分布
+                if data.get("category_distribution"):
+                    st.subheader("📂 话题分类分布")
+                    category_chart = data["category_distribution"]
+                    st.bar_chart(category_chart)
+                
+                # 热门关键词
+                if data.get("top_keywords"):
+                    st.subheader("🔑 热门关键词")
+                    keywords = data["top_keywords"]
+                    
+                    # 显示前10个关键词
+                    keyword_data = []
+                    for keyword, count in list(keywords.items())[:10]:
+                        keyword_data.append({"关键词": keyword, "出现次数": count})
+                    
+                    df = pd.DataFrame(keyword_data)
+                    st.dataframe(df, use_container_width=True)
+                
+                # 创作机会
+                if data.get("content_opportunities"):
+                    st.subheader("💡 创作机会推荐")
+                    opportunities = data["content_opportunities"]
+                    
+                    for opp in opportunities[:5]:
+                        with st.expander(f"#{opp['rank']} {opp['topic']} (热度: {opp['hot_score']:.1f})"):
+                            st.write(f"**平台：** {opp['platform']}")
+                            st.write(f"**分类：** {opp['category']}")
+                            st.write(f"**情感倾向：** {opp['sentiment']}")
+                            if opp['keywords']:
+                                keywords_str = ", ".join(opp['keywords'])
+                                st.write(f"**关键词：** {keywords_str}")
+                            st.write(f"**创作建议：** {opp['suggestion']}")
+            else:
+                st.info("暂无热点数据，建议先运行热点抓取功能")
+        else:
+            st.error("无法获取热点分析数据")
+    
+    # AI使用统计标签页
+    with tab3:
+        st.subheader("🤖 AI使用统计")
+        
+        # 获取AI使用统计
+        stats_result = call_api("/api/ai/stats")
+        if stats_result["success"]:
+            stats = stats_result["data"]
+            configs = stats.get("configs", [])
+            
+            # 总体统计
+            col1, col2, col3, col4 = st.columns(4)
+            with col1:
+                st.metric("配置总数", len(configs))
+            with col2:
+                st.metric("活跃配置", len([c for c in configs if c["is_active"]]))
+            with col3:
+                st.metric("总使用次数", stats.get("total_usage", 0))
+            with col4:
+                st.metric("总Token消耗", stats.get("total_tokens", 0))
+            
+            # 配置详细统计
+            if configs:
+                st.subheader("📊 各模型使用情况")
+                
+                df_data = []
+                for config in configs:
+                    df_data.append({
+                        "名称": config["name"],
+                        "提供商": config["provider"],
+                        "使用次数": config["usage_count"],
+                        "Token消耗": config["total_tokens"],
+                        "状态": "✅ 活跃" if config["is_active"] else "❌ 停用",
+                        "默认": "⭐ 是" if config["is_default"] else ""
+                    })
+                
+                df = pd.DataFrame(df_data)
+                st.dataframe(df, use_container_width=True)
+                
+                # 使用量图表
+                if any(config["usage_count"] > 0 for config in configs):
+                    st.subheader("📈 使用分布")
+                    
+                    usage_data = {config["name"]: config["usage_count"] for config in configs if config["usage_count"] > 0}
+                    if usage_data:
+                        st.bar_chart(usage_data)
+                    
+                    token_data = {config["name"]: config["total_tokens"] for config in configs if config["total_tokens"] > 0}
+                    if token_data:
+                        st.subheader("🥧 Token消耗分布")
+                        st.bar_chart(token_data)
+            else:
+                st.info("暂无AI模型配置数据")
+        else:
+            st.error("无法获取AI统计数据")
+    
+    # 综合报告标签页
+    with tab4:
+        st.subheader("📋 综合分析报告")
+        
+        days_filter = st.selectbox("报告时间范围", [7, 15, 30, 60], index=2, format_func=lambda x: f"最近{x}天", key="report_days")
+        
+        if st.button("生成综合报告", type="primary"):
+            with st.spinner("正在生成综合报告..."):
+                report_result = call_api(f"/api/analytics/report?days={days_filter}")
+                
+                if report_result["success"]:
+                    data = report_result["data"]
+                    
+                    # 报告摘要
+                    if data.get("summary"):
+                        st.subheader("📊 报告摘要")
+                        summary = data["summary"]
+                        
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.metric("总发布数", summary.get("total_posts", 0))
+                        with col2:
+                            st.metric("成功率", f"{summary.get('success_rate', 0):.1f}%")
+                        with col3:
+                            st.metric("热点话题数", summary.get("total_hotspots", 0))
+                        
+                        # 关键洞察
+                        if summary.get("key_insights"):
+                            st.subheader("💡 关键洞察")
+                            for insight in summary["key_insights"]:
+                                st.info(f"• {insight}")
+                    
+                    # 内容创作建议
+                    if data.get("recommendations"):
+                        st.subheader("🎯 创作建议")
+                        for rec in data["recommendations"]:
+                            priority_color = {
+                                "high": "🔴",
+                                "medium": "🟡", 
+                                "low": "🟢"
+                            }
+                            priority_icon = priority_color.get(rec.get("priority", "medium"), "🟡")
+                            
+                            st.write(f"{priority_icon} **{rec['title']}**")
+                            st.write(f"   {rec['description']}")
+                    
+                    # 详细数据展示
+                    with st.expander("📈 详细数据"):
+                        st.json(data)
+                else:
+                    st.error("生成报告失败")
+        
+        # 获取内容创作建议
+        st.subheader("💡 实时创作建议")
+        recommendations_result = call_api("/api/analytics/recommendations")
+        
+        if recommendations_result["success"]:
+            data = recommendations_result["data"]
+            
+            if data.get("recommendations"):
+                for rec in data["recommendations"]:
+                    priority_color = {
+                        "high": "error",
+                        "medium": "warning", 
+                        "low": "success"
+                    }
+                    message_type = priority_color.get(rec.get("priority", "medium"), "info")
+                    
+                    if message_type == "error":
+                        st.error(f"**{rec['title']}** - {rec['description']}")
+                    elif message_type == "warning":
+                        st.warning(f"**{rec['title']}** - {rec['description']}")
+                    else:
+                        st.success(f"**{rec['title']}** - {rec['description']}")
+            else:
+                st.info("暂无创作建议，建议增加更多发布数据")
+        else:
+            st.info("无法获取创作建议")
 
 # 页面底部
 st.markdown("---")

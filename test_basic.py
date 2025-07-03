@@ -56,9 +56,14 @@ def test_ai_model_manager():
         # 测试使用统计
         stats = manager.get_usage_stats()
         
+        # 测试DeepSeek模型支持
+        deepseek_model = manager.models.get("deepseek")
+        assert deepseek_model is not None, "DeepSeek模型未注册"
+        
         db.close()
         
         print(f"✅ AI模型管理器正常，配置数量: {len(configs)}")
+        print("✅ DeepSeek模型支持已添加")
         return True
     except Exception as e:
         print(f"❌ AI模型管理器测试失败: {e}")

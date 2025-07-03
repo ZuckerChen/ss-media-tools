@@ -187,6 +187,73 @@ class DashScopeModel(BaseAIModel):
         return result["success"]
 
 
+class DeepSeekModel(BaseAIModel):
+    """DeepSeek模型"""
+    
+    def __init__(self, config: AIModelConfig):
+        super().__init__(config)
+        self.base_url = config.api_secret or "https://api.deepseek.com"
+        
+    def generate_text(self, prompt: str, **kwargs) -> Dict[str, Any]:
+        """生成文本"""
+        try:
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {self.config.api_key}"
+            }
+            
+            payload = {
+                "model": self.config.model_name or "deepseek-chat",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": kwargs.get('max_tokens', self.config.max_tokens),
+                "temperature": kwargs.get('temperature', self.config.temperature),
+                "stream": False
+            }
+            
+            response = requests.post(
+                f"{self.base_url}/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                choice = result["choices"][0]
+                usage = result.get("usage", {})
+                
+                return {
+                    "success": True,
+                    "content": choice["message"]["content"],
+                    "usage": {
+                        "prompt_tokens": usage.get("prompt_tokens", 0),
+                        "completion_tokens": usage.get("completion_tokens", 0),
+                        "total_tokens": usage.get("total_tokens", 0)
+                    },
+                    "model": result.get("model", self.config.model_name)
+                }
+            else:
+                error_msg = f"HTTP {response.status_code}: {response.text}"
+                return {
+                    "success": False,
+                    "error": error_msg,
+                    "content": None
+                }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+                "content": None
+            }
+    
+    def test_connection(self) -> bool:
+        """测试连接"""
+        result = self.generate_text("测试连接", max_tokens=10)
+        return result["success"]
+
+
 class AIModelManager:
     """AI模型管理器"""
     
@@ -196,6 +263,7 @@ class AIModelManager:
             "openai": OpenAIModel,
             "baidu": BaiduModel,
             "dashscope": DashScopeModel,
+            "deepseek": DeepSeekModel,
         }
     
     def get_model(self, config_id: Optional[int] = None) -> Optional[BaseAIModel]:

@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 
 from config import settings
-from models import get_db, init_db, AIModelConfig, ContentDraft, PublishRecord, PlatformAccount
+from models import get_db, init_db, AIModelConfig, ContentDraft, PublishRecord, PlatformAccount, HotTopic
 from ai_models import AIModelManager, PromptTemplates
 from publisher import PublishManager, ScheduledPublishManager
+from hotspot_crawler import HotspotCrawlerManager
+from analytics import AnalyticsManager
 
 
 # 请求/响应模型
@@ -617,6 +619,211 @@ async def get_publish_stats(db: Session = Depends(get_db)):
     }
 
 
+# 数据分析相关API
+@app.get("/api/analytics/content", summary="获取内容表现分析")
+async def get_content_analytics(
+    days: int = 30,
+    platform: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取内容表现分析"""
+    try:
+        manager = AnalyticsManager(db)
+        result = manager.content_analyzer.analyze_content_performance(days=days, platform=platform)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
+
+
+@app.get("/api/analytics/hotspot", summary="获取热点分析")
+async def get_hotspot_analytics(
+    days: int = 7,
+    db: Session = Depends(get_db)
+):
+    """获取热点分析"""
+    try:
+        manager = AnalyticsManager(db)
+        result = manager.hotspot_analyzer.analyze_trending_topics(days=days)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"分析失败: {str(e)}")
+
+
+@app.get("/api/analytics/recommendations", summary="获取内容创作建议")
+async def get_content_recommendations(
+    platform: Optional[str] = None,
+    db: Session = Depends(get_db)
+):
+    """获取内容创作建议"""
+    try:
+        manager = AnalyticsManager(db)
+        result = manager.content_analyzer.get_content_recommendations(platform=platform)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取建议失败: {str(e)}")
+
+
+@app.get("/api/analytics/report", summary="获取综合分析报告")
+async def get_comprehensive_report(
+    days: int = 30,
+    db: Session = Depends(get_db)
+):
+    """获取综合分析报告"""
+    try:
+        manager = AnalyticsManager(db)
+        result = manager.generate_comprehensive_report(days=days)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成报告失败: {str(e)}")
+
+
+# 热点抓取相关API
+@app.post("/api/hotspot/crawl", summary="抓取热点数据")
+async def crawl_hotspots(
+    platforms: Optional[List[str]] = None,
+    db: Session = Depends(get_db)
+):
+    """手动抓取热点数据"""
+    try:
+        manager = HotspotCrawlerManager(db)
+        result = manager.crawl_all_platforms(platforms)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"抓取失败: {str(e)}")
+
+
+@app.get("/api/hotspot/topics", summary="获取热点话题")
+async def get_hot_topics(
+    platform: Optional[str] = None,
+    category: Optional[str] = None,
+    hours: int = 24,
+    limit: int = 50,
+    db: Session = Depends(get_db)
+):
+    """获取热点话题列表"""
+    try:
+        manager = HotspotCrawlerManager(db)
+        topics = manager.get_hot_topics(platform, category, hours, limit)
+        
+        return {
+            "total": len(topics),
+            "topics": [
+                {
+                    "id": topic.id,
+                    "platform": topic.platform,
+                    "title": topic.title,
+                    "description": topic.description,
+                    "keywords": topic.keywords,
+                    "hot_score": topic.hot_score,
+                    "rank_position": topic.rank_position,
+                    "category": topic.category,
+                    "sentiment": topic.sentiment,
+                    "engagement_count": topic.engagement_count,
+                    "created_at": topic.created_at,
+                    "updated_at": topic.updated_at
+                }
+                for topic in topics
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取热点失败: {str(e)}")
+
+
+@app.get("/api/hotspot/keywords", summary="获取热门关键词")
+async def get_trending_keywords(
+    hours: int = 24,
+    limit: int = 20,
+    db: Session = Depends(get_db)
+):
+    """获取热门关键词"""
+    try:
+        manager = HotspotCrawlerManager(db)
+        keywords = manager.get_trending_keywords(hours, limit)
+        return {
+            "keywords": keywords
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取关键词失败: {str(e)}")
+
+
+@app.get("/api/hotspot/platforms", summary="获取支持的抓取平台")
+async def get_hotspot_platforms():
+    """获取支持的热点抓取平台"""
+    return {
+        "platforms": [
+            {"platform": "weibo", "name": "微博热搜", "description": "微博实时热搜榜"},
+            {"platform": "zhihu", "name": "知乎热榜", "description": "知乎热门话题"},
+            {"platform": "toutiao", "name": "今日头条", "description": "头条热点话题"}
+        ]
+    }
+
+
+@app.delete("/api/hotspot/cleanup", summary="清理旧数据")
+async def cleanup_old_hotspots(
+    days: int = 7,
+    db: Session = Depends(get_db)
+):
+    """清理旧的热点数据"""
+    try:
+        manager = HotspotCrawlerManager(db)
+        deleted_count = manager.cleanup_old_data(days)
+        return {
+            "success": True,
+            "deleted_count": deleted_count,
+            "message": f"已清理 {deleted_count} 条过期数据"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"清理失败: {str(e)}")
+
+
+@app.get("/api/hotspot/stats", summary="获取热点统计")
+async def get_hotspot_stats(db: Session = Depends(get_db)):
+    """获取热点数据统计"""
+    try:
+        from datetime import datetime, timedelta
+        from collections import defaultdict
+        
+        # 获取最近24小时的数据
+        recent_topics = db.query(HotTopic).filter(
+            HotTopic.created_at >= datetime.now() - timedelta(hours=24)
+        ).all()
+        
+        # 按平台统计
+        platform_stats = defaultdict(lambda: {"count": 0, "avg_score": 0})
+        total_score = defaultdict(float)
+        
+        for topic in recent_topics:
+            platform_stats[topic.platform]["count"] += 1
+            total_score[topic.platform] += topic.hot_score
+        
+        # 计算平均分数
+        for platform in platform_stats:
+            if platform_stats[platform]["count"] > 0:
+                platform_stats[platform]["avg_score"] = round(
+                    total_score[platform] / platform_stats[platform]["count"], 2
+                )
+        
+        # 按类别统计
+        category_stats = defaultdict(int)
+        for topic in recent_topics:
+            category_stats[topic.category] += 1
+        
+        # 情感分析统计
+        sentiment_stats = defaultdict(int)
+        for topic in recent_topics:
+            sentiment_stats[topic.sentiment] += 1
+        
+        return {
+            "total_topics": len(recent_topics),
+            "platform_stats": dict(platform_stats),
+            "category_stats": dict(category_stats),
+            "sentiment_stats": dict(sentiment_stats),
+            "time_range": "最近24小时"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"获取统计失败: {str(e)}")
+
+
 # 健康检查
 @app.get("/health", summary="健康检查")
 async def health_check():
@@ -626,7 +833,7 @@ async def health_check():
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
+        host="127.0.0.1",
         port=8000,
         reload=settings.DEBUG
     ) 

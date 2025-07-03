@@ -152,16 +152,18 @@ def init_db():
         # 检查是否已有配置
         existing_config = db.query(AIModelConfig).first()
         if not existing_config:
-            # 创建默认OpenAI配置
+            # 创建默认DeepSeek配置
             default_config = AIModelConfig(
-                name="默认GPT模型",
-                provider="openai",
-                model_name="gpt-3.5-turbo",
+                name="默认DeepSeek模型",
+                provider="deepseek",
+                model_name="deepseek-chat",
+                max_tokens=4000,
+                temperature=0.7,
                 is_default=True
             )
             db.add(default_config)
             db.commit()
-            print("已创建默认AI模型配置")
+            print("已创建默认DeepSeek模型配置")
     except Exception as e:
         print(f"初始化数据库出错: {e}")
         db.rollback()

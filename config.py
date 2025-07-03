@@ -33,6 +33,10 @@ class Settings(BaseSettings):
     TENCENT_SECRET_ID: str = ""
     TENCENT_SECRET_KEY: str = ""
     
+    # DeepSeek
+    DEEPSEEK_API_KEY: str = ""
+    DEEPSEEK_BASE_URL: str = "https://api.deepseek.com"
+    
     # 默认模型设置
     DEFAULT_AI_MODEL: str = "openai"
     MAX_TOKENS: int = 2000
@@ -83,6 +87,13 @@ AI_MODEL_CONFIGS = {
         "models": ["hunyuan-lite", "hunyuan-standard", "hunyuan-pro"],
         "max_tokens": 2000,
         "support_functions": False
+    },
+    "deepseek": {
+        "name": "DeepSeek",
+        "api_key_field": "DEEPSEEK_API_KEY",
+        "models": ["deepseek-chat", "deepseek-coder"],
+        "max_tokens": 4000,
+        "support_functions": True
     }
 }
 
