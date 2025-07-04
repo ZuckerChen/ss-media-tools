@@ -4,7 +4,7 @@
 import streamlit as st
 import requests
 import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Iterator
 import pandas as pd
 from datetime import datetime
 import time
@@ -26,25 +26,129 @@ def call_api(endpoint: str, method: str = "GET", data: Dict = None) -> Dict[str,
     url = f"{API_BASE_URL}{endpoint}"
     
     try:
+        # 添加超时设置
+        timeout = 30
+        
         if method == "GET":
-            response = requests.get(url)
+            response = requests.get(url, timeout=timeout)
         elif method == "POST":
-            response = requests.post(url, json=data)
+            response = requests.post(url, json=data, timeout=timeout)
         elif method == "PUT":
-            response = requests.put(url, json=data)
+            response = requests.put(url, json=data, timeout=timeout)
         elif method == "DELETE":
-            response = requests.delete(url)
+            response = requests.delete(url, timeout=timeout)
+        else:
+            return {
+                "success": False,
+                "error": f"不支持的HTTP方法: {method}",
+                "data": {},
+                "status_code": 400
+            }
+        
+        # 检查响应状态
+        if response.status_code >= 400:
+            try:
+                error_data = response.json()
+                error_message = error_data.get('detail', error_data.get('message', f'HTTP {response.status_code}'))
+            except:
+                error_message = f'HTTP {response.status_code} - {response.reason}'
+            
+            return {
+                "success": False,
+                "error": error_message,
+                "data": {},
+                "status_code": response.status_code
+            }
+        
+        # 解析响应数据
+        try:
+            response_data = response.json() if response.content else {}
+        except json.JSONDecodeError:
+            response_data = {"raw_response": response.text}
         
         return {
-            "success": response.status_code < 400,
-            "data": response.json() if response.content else {},
+            "success": True,
+            "data": response_data,
             "status_code": response.status_code
+        }
+        
+    except requests.exceptions.Timeout:
+        return {
+            "success": False,
+            "error": "请求超时，请检查网络连接或稍后重试",
+            "data": {},
+            "status_code": 408
+        }
+    except requests.exceptions.ConnectionError:
+        return {
+            "success": False,
+            "error": "无法连接到服务器，请检查后端服务是否正常运行",
+            "data": {},
+            "status_code": 503
         }
     except Exception as e:
         return {
             "success": False,
-            "error": str(e),
-            "data": {}
+            "error": f"请求异常: {str(e)}",
+            "data": {},
+            "status_code": 500
+        }
+
+
+def call_stream_api(endpoint: str, data: Dict = None) -> Iterator[Dict[str, Any]]:
+    """调用流式API接口"""
+    url = f"{API_BASE_URL}{endpoint}"
+    
+    try:
+        timeout = 60
+        response = requests.post(url, json=data, stream=True, timeout=timeout)
+        
+        if response.status_code != 200:
+            try:
+                error_data = response.json()
+                error_message = error_data.get('detail', f'HTTP {response.status_code}')
+            except:
+                error_message = f'HTTP {response.status_code} - {response.reason}'
+            
+            yield {
+                "success": False,
+                "error": error_message,
+                "status_code": response.status_code
+            }
+            return
+        
+        # 处理流式响应
+        for line in response.iter_lines():
+            if line:
+                line_str = line.decode('utf-8')
+                if line_str.startswith('data: '):
+                    data_str = line_str[6:]  # 移除 'data: ' 前缀
+                    if data_str.strip() == '[DONE]':
+                        break
+                    
+                    try:
+                        chunk = json.loads(data_str)
+                        yield chunk
+                    except json.JSONDecodeError:
+                        continue
+    
+    except requests.exceptions.Timeout:
+        yield {
+            "success": False,
+            "error": "请求超时，请检查网络连接或稍后重试",
+            "status_code": 408
+        }
+    except requests.exceptions.ConnectionError:
+        yield {
+            "success": False,
+            "error": "无法连接到服务器，请检查后端服务是否正常运行",
+            "status_code": 503
+        }
+    except Exception as e:
+        yield {
+            "success": False,
+            "error": f"请求异常: {str(e)}",
+            "status_code": 500
         }
 
 
@@ -56,6 +160,139 @@ def format_datetime(dt_str: str) -> str:
     except:
         return dt_str
 
+
+# 初始化session state
+def init_session_state():
+    """初始化session state"""
+    if 'generated_content' not in st.session_state:
+        st.session_state.generated_content = {}
+    if 'last_operation' not in st.session_state:
+        st.session_state.last_operation = None
+    if 'operation_result' not in st.session_state:
+        st.session_state.operation_result = None
+
+def save_operation_result(operation_type: str, result: Dict[str, Any], additional_data: Dict = None):
+    """保存操作结果到session state"""
+    st.session_state.last_operation = operation_type
+    st.session_state.operation_result = {
+        'result': result,
+        'timestamp': datetime.now().isoformat(),
+        'additional_data': additional_data or {}
+    }
+
+def display_operation_result():
+    """显示保存的操作结果"""
+    if st.session_state.operation_result and st.session_state.last_operation:
+        result_data = st.session_state.operation_result
+        result = result_data['result']
+        
+        if result['success']:
+            st.success(f"✅ {st.session_state.last_operation}成功!")
+            # 根据操作类型显示不同的结果
+            if 'content' in result.get('data', {}):
+                st.markdown(result['data']['content'])
+            elif 'titles' in result.get('data', {}):
+                st.markdown("### 生成的标题：")
+                st.markdown(result['data']['titles'])
+            elif 'outline' in result.get('data', {}):
+                st.markdown("### 内容大纲：")
+                st.markdown(result['data']['outline'])
+        else:
+            st.error(f"❌ {st.session_state.last_operation}失败: {result.get('error', '未知错误')}")
+
+def show_success_feedback(operation: str, details: Dict = None):
+    """显示成功操作的详细反馈"""
+    # 主要成功消息
+    st.success(f"🎉 {operation}成功完成！")
+    
+    # 显示详细信息
+    if details:
+        info_cols = st.columns(len(details))
+        for i, (key, value) in enumerate(details.items()):
+            with info_cols[i]:
+                st.metric(key, value)
+    
+    # 显示时间戳
+    st.caption(f"⏰ 完成时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+def show_operation_summary(operation_type: str, success_count: int, total_count: int, details: List[Dict] = None):
+    """显示批量操作的汇总信息"""
+    if success_count == total_count:
+        st.success(f"🎉 {operation_type}全部成功！({success_count}/{total_count})")
+    elif success_count > 0:
+        st.warning(f"⚠️ {operation_type}部分成功 ({success_count}/{total_count})")
+    else:
+        st.error(f"❌ {operation_type}全部失败 ({success_count}/{total_count})")
+    
+    # 显示详细结果
+    if details:
+        with st.expander("📊 详细结果"):
+            for detail in details:
+                status_icon = "✅" if detail.get('success') else "❌"
+                st.write(f"{status_icon} {detail.get('item', '')}: {detail.get('message', '')}")
+
+
+def display_stream_content(placeholder, endpoint: str, data: Dict, content_key: str = "content", full_content_key: str = "full_content"):
+    """显示流式内容生成"""
+    full_content = ""
+    error_occurred = False
+    
+    try:
+        for chunk in call_stream_api(endpoint, data):
+            if "error" in chunk:
+                placeholder.error(f"❌ 生成失败: {chunk['error']}")
+                error_occurred = True
+                break
+            
+            if chunk.get("success", True):
+                # 获取当前块的内容
+                chunk_content = chunk.get(content_key, "")
+                if chunk_content:
+                    full_content += chunk_content
+                    # 实时更新显示
+                    placeholder.markdown(full_content)
+                
+                # 检查是否完成
+                if chunk.get("finished", False):
+                    # 显示最终结果和使用统计
+                    usage = chunk.get("usage", {})
+                    if usage:
+                        st.caption(f"📊 Token使用: {usage.get('total_tokens', 0)} | 完成时间: {datetime.now().strftime('%H:%M:%S')}")
+                    break
+        
+        if not error_occurred:
+            st.success("✅ 内容生成完成！")
+            return full_content
+        else:
+            return None
+            
+    except Exception as e:
+        placeholder.error(f"❌ 流式生成异常: {str(e)}")
+        return None
+
+
+def create_stream_ui(title: str, endpoint: str, data: Dict, content_key: str = "content"):
+    """创建流式生成UI组件"""
+    st.subheader(f"🔄 {title}")
+    
+    # 创建占位符
+    content_placeholder = st.empty()
+    status_placeholder = st.empty()
+    
+    # 开始流式生成
+    with status_placeholder:
+        st.info("🔄 正在生成内容，请稍候...")
+    
+    # 显示流式内容
+    result = display_stream_content(content_placeholder, endpoint, data, content_key)
+    
+    # 清除状态信息
+    status_placeholder.empty()
+    
+    return result
+
+# 初始化
+init_session_state()
 
 # 侧边栏导航
 st.sidebar.title("🚀 自媒体运营工具")
@@ -185,13 +422,23 @@ elif page == "🤖 AI模型管理":
                 
                 with col4:
                     # 测试连接按钮
-                    if st.button(f"🔗 测试", key=f"test_{config['id']}"):
+                    test_button_key = f"test_{config['id']}"
+                    if st.button(f"🔗 测试", key=test_button_key):
                         with st.spinner("测试连接中..."):
                             test_result = call_api(f"/api/ai/configs/{config['id']}/test", "POST")
-                            if test_result["success"] and test_result["data"]["status"] == "success":
-                                st.success("连接正常！")
+                            if test_result["success"]:
+                                if test_result["data"].get("status") == "success":
+                                    st.success("✅ 连接正常！")
+                                else:
+                                    st.error(f"❌ 连接失败: {test_result['data'].get('message', '未知错误')}")
                             else:
-                                st.error("连接失败！")
+                                st.error(f"❌ 测试失败: {test_result.get('error', '未知错误')}")
+                                # 显示详细错误信息
+                                if test_result.get('status_code'):
+                                    st.error(f"状态码: {test_result['status_code']}")
+                        
+                        # 短暂延迟后重新运行，确保状态更新
+                        time.sleep(0.1)
                 
                 st.write(f"⏰ 创建时间: {format_datetime(config['created_at'])}")
                 st.divider()
@@ -222,186 +469,283 @@ elif page == "✍️ 内容创作":
     # 创作功能选择
     creation_type = st.radio(
         "选择创作类型",
-        ["🏷️ 标题生成", "📋 大纲制作", "🔄 内容改写", "💬 自由对话"],
+        ["🎯 综合创作", "🔄 内容改写"],
         horizontal=True
     )
     
-    if creation_type == "🏷️ 标题生成":
-        st.subheader("🏷️ 智能标题生成")
+    if creation_type == "🎯 综合创作":
+        st.subheader("🎯 综合创作 - 一键生成完整内容")
+        st.markdown("🚀 **根据主题一次性生成标题、正文和推荐标签**")
         
-        with st.form("title_generation"):
+        # 流式输出选项
+        enable_stream = st.checkbox("🔄 启用流式输出", value=True, help="实时显示AI生成过程，提供更好的用户体验")
+        
+        with st.form("comprehensive_creation"):
             col1, col2 = st.columns(2)
             
             with col1:
+                st.markdown("#### 基本信息")
                 topic = st.text_area("主题内容", placeholder="请输入要创作的主题内容...", height=100)
-                platform = st.selectbox("目标平台", ["通用", "微信公众号", "微博", "小红书", "抖音", "知乎"])
+                platform = st.selectbox("目标平台", ["通用", "微信公众号", "微博", "小红书", "抖音", "知乎", "头条号"])
+                style = st.selectbox("创作风格", ["专业", "通俗易懂", "风趣幽默", "权威严谨", "温暖亲切", "时尚潮流", "科技感"])
             
             with col2:
-                style = st.selectbox("标题风格", ["专业", "吸引眼球", "温馨", "幽默", "权威", "疑问式"])
-                requirements = st.text_area("特殊要求", placeholder="例如：包含关键词、控制字数等...", height=100)
+                st.markdown("#### 个性化设置")
+                audience = st.text_input("目标受众", placeholder="例如：年轻女性、科技爱好者、职场人士...", value="通用受众")
+                length = st.selectbox("内容长度", ["短文(500-800字)", "中等长度(800-1200字)", "长文(1200-2000字)", "深度文章(2000+字)"])
+                keywords = st.text_input("关键词", placeholder="用逗号分隔，例如：健康,养生,生活方式")
+                requirements = st.text_area("特殊要求", placeholder="例如：包含具体案例、添加数据支撑、突出实用性等...", height=80)
             
-            if st.form_submit_button("🎯 生成标题"):
+            if st.form_submit_button("🚀 开始创作"):
                 if not topic:
                     st.error("请输入主题内容")
                 else:
-                    with st.spinner("AI正在生成标题..."):
-                        data = {
-                            "topic": topic,
-                            "platform": platform,
-                            "style": style,
-                            "requirements": requirements,
-                            "config_id": selected_config_id
-                        }
+                    data = {
+                        "topic": topic,
+                        "platform": platform,
+                        "style": style,
+                        "audience": audience,
+                        "length": length,
+                        "keywords": keywords,
+                        "requirements": requirements,
+                        "config_id": selected_config_id
+                    }
+                    
+                    generated_content = ""
+                    
+                    if enable_stream:
+                        # 流式生成
+                        st.markdown("### 📝 AI正在创作中...")
+                        content_placeholder = st.empty()
                         
-                        result = call_api("/api/content/title", "POST", data)
-                        
-                        if result["success"]:
-                            st.success("标题生成成功！")
-                            st.markdown("### 生成的标题：")
-                            st.markdown(result["data"]["titles"])
-                            
-                            # 显示使用统计
-                            if "usage" in result["data"]:
-                                usage = result["data"]["usage"]
-                                st.info(f"本次消耗Token: {usage.get('total_tokens', '未知')}")
-                        else:
-                            st.error(f"生成失败: {result.get('error', '未知错误')}")
-    
-    elif creation_type == "📋 大纲制作":
-        st.subheader("📋 内容大纲制作")
-        
-        with st.form("outline_generation"):
-            title = st.text_input("文章标题", placeholder="请输入文章标题...")
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                platform = st.selectbox("目标平台", ["通用", "微信公众号", "微博", "小红书", "知乎", "头条号"])
-                audience = st.text_input("目标受众", value="通用受众", placeholder="例如：年轻女性、科技爱好者...")
-            
-            with col2:
-                length = st.selectbox("内容长度", ["短文", "中等长度", "长文"])
-            
-            if st.form_submit_button("📝 生成大纲"):
-                if not title:
-                    st.error("请输入文章标题")
-                else:
-                    with st.spinner("AI正在制作大纲..."):
-                        data = {
-                            "title": title,
-                            "platform": platform,
-                            "audience": audience,
-                            "length": length,
-                            "config_id": selected_config_id
-                        }
-                        
-                        result = call_api("/api/content/outline", "POST", data)
-                        
-                        if result["success"]:
-                            st.success("大纲生成成功！")
-                            st.markdown("### 内容大纲：")
-                            st.markdown(result["data"]["outline"])
-                            
-                            # 保存为草稿选项
-                            if st.button("💾 保存为草稿"):
-                                draft_data = {
-                                    "title": title,
-                                    "outline": result["data"]["outline"],
-                                    "platform_type": platform,
-                                    "category": "AI生成大纲"
-                                }
+                        try:
+                            full_content = ""
+                            for chunk in call_stream_api("/api/content/comprehensive/stream", data):
+                                if "error" in chunk:
+                                    st.error(f"❌ 生成失败: {chunk['error']}")
+                                    break
                                 
-                                draft_result = call_api("/api/drafts", "POST", draft_data)
-                                if draft_result["success"]:
-                                    st.success("已保存为草稿！")
-                                else:
-                                    st.error("保存失败")
-                        else:
-                            st.error(f"生成失败: {result.get('error', '未知错误')}")
+                                if chunk.get("success", True):
+                                    chunk_content = chunk.get("content", "")
+                                    if chunk_content:
+                                        full_content += chunk_content
+                                        content_placeholder.markdown(full_content)
+                                    
+                                    if chunk.get("finished", False):
+                                        usage = chunk.get("usage", {})
+                                        if usage:
+                                            st.info(f"📊 本次消耗Token: {usage.get('total_tokens', '未知')} | 完成时间: {datetime.now().strftime('%H:%M:%S')}")
+                                        st.success("✅ 综合创作完成！")
+                                        generated_content = full_content
+                                        break
+                        except Exception as e:
+                            st.error(f"❌ 流式生成异常: {str(e)}")
+                    else:
+                        # 普通生成
+                        with st.spinner("AI正在进行综合创作..."):
+                            result = call_api("/api/content/comprehensive", "POST", data)
+                            
+                            if result["success"]:
+                                st.success("✅ 综合创作成功！")
+                                st.markdown("### 📝 创作结果：")
+                                st.markdown(result["data"]["content"])
+                                generated_content = result["data"]["content"]
+                                
+                                # 显示使用统计
+                                if "usage" in result["data"]:
+                                    usage = result["data"]["usage"]
+                                    st.info(f"📊 本次消耗Token: {usage.get('total_tokens', '未知')}")
+                            else:
+                                st.error(f"❌ 生成失败: {result.get('error', '未知错误')}")
+                                if result.get('status_code'):
+                                    st.error(f"状态码: {result['status_code']}")
+                                
+                                # 显示调试信息
+                                with st.expander("🔍 详细错误信息"):
+                                    st.json(result)
+                    
+                    # 保存生成的内容到session state（只在生成成功时）
+                    if generated_content:
+                        st.session_state[f"generated_comprehensive_{hash(topic)}"] = {
+                            "title": topic[:50] + "..." if len(topic) > 50 else topic,
+                            "content": generated_content,
+                            "category": "综合创作",
+                            "platform_type": platform,
+                            "ai_generated": True
+                        }
+        
+        # 表单外部：显示保存草稿按钮（如果有生成的内容）
+        for key in st.session_state.keys():
+            if key.startswith("generated_comprehensive_"):
+                draft_data = st.session_state[key]
+                save_draft_key = f"save_draft_{key}"
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.info(f"📝 综合创作结果: {draft_data['title']}")
+                with col2:
+                    if st.button("💾 保存为草稿", key=save_draft_key):
+                        with st.spinner("正在保存草稿..."):
+                            draft_result = call_api("/api/drafts", "POST", draft_data)
+                            if draft_result["success"]:
+                                st.success("✅ 已保存为草稿！")
+                                st.info(f"草稿ID: {draft_result['data'].get('id', '未知')}")
+                                # 保存成功后移除session state
+                                del st.session_state[key]
+                                st.rerun()
+                            else:
+                                st.error(f"❌ 保存失败: {draft_result.get('error', '未知错误')}")
+                                if draft_result.get('status_code'):
+                                    st.error(f"状态码: {draft_result['status_code']}")
+                break  # 只显示最新的一个
     
     elif creation_type == "🔄 内容改写":
         st.subheader("🔄 智能内容改写")
+        st.markdown("🎨 **将现有内容改写为不同风格、适配不同平台的版本**")
+        
+        # 流式输出选项
+        enable_stream = st.checkbox("🔄 启用流式输出", value=True, help="实时显示AI生成过程，提供更好的用户体验", key="rewrite_stream")
         
         with st.form("content_rewrite"):
+            st.markdown("#### 原始内容")
             original_content = st.text_area("原始内容", placeholder="请输入需要改写的内容...", height=200)
             
             col1, col2 = st.columns(2)
             with col1:
-                platform = st.selectbox("目标平台", ["通用", "微信公众号", "微博", "小红书", "知乎"])
+                st.markdown("#### 改写设置")
+                rewrite_type = st.selectbox("改写类型", ["风格转换", "平台适配", "受众调整", "长度调整"])
+                rewrite_strength = st.selectbox("改写强度", ["轻度", "中度", "重度"])
+                platform = st.selectbox("目标平台", ["通用", "微信公众号", "微博", "小红书", "抖音", "知乎", "头条号"])
+                audience = st.text_input("目标受众", placeholder="例如：年轻女性、科技爱好者、职场人士...", value="通用受众")
+            
             with col2:
-                requirements = st.text_input("改写要求", value="改写为更吸引人的版本", placeholder="例如：更口语化、更正式...")
+                st.markdown("#### 个性化选项")
+                style = st.selectbox("风格要求", ["专业", "通俗易懂", "风趣幽默", "权威严谨", "温暖亲切", "时尚潮流", "科技感"])
+                length_requirement = st.selectbox("长度要求", ["保持原长度", "压缩内容", "扩展内容", "大幅扩展"])
+                keywords = st.text_input("关键词", placeholder="需要融入的关键词，用逗号分隔")
+                requirements = st.text_area("特殊要求", placeholder="例如：更口语化、更正式、增加案例等...", height=80)
             
             if st.form_submit_button("✨ 开始改写"):
                 if not original_content:
                     st.error("请输入原始内容")
                 else:
-                    with st.spinner("AI正在改写内容..."):
-                        data = {
-                            "original_content": original_content,
-                            "requirements": requirements,
-                            "platform": platform,
-                            "config_id": selected_config_id
-                        }
+                    data = {
+                        "original_content": original_content,
+                        "rewrite_type": rewrite_type,
+                        "rewrite_strength": rewrite_strength,
+                        "platform": platform,
+                        "audience": audience,
+                        "style": style,
+                        "length_requirement": length_requirement,
+                        "keywords": keywords,
+                        "requirements": requirements,
+                        "config_id": selected_config_id
+                    }
+                    
+                    generated_rewrite = ""
+                    
+                    if enable_stream:
+                        # 流式生成
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            st.markdown("### 📄 原始内容：")
+                            st.markdown(original_content)
                         
-                        result = call_api("/api/content/rewrite", "POST", data)
-                        
-                        if result["success"]:
-                            st.success("内容改写成功！")
+                        with col2:
+                            st.markdown("### ✨ 改写结果：")
+                            content_placeholder = st.empty()
                             
-                            col1, col2 = st.columns(2)
-                            with col1:
-                                st.markdown("### 原始内容：")
-                                st.markdown(original_content)
+                            try:
+                                full_content = ""
+                                for chunk in call_stream_api("/api/content/rewrite/stream", data):
+                                    if "error" in chunk:
+                                        st.error(f"❌ 改写失败: {chunk['error']}")
+                                        break
+                                    
+                                    if chunk.get("success", True):
+                                        chunk_content = chunk.get("content", "")
+                                        if chunk_content:
+                                            full_content += chunk_content
+                                            content_placeholder.markdown(full_content)
+                                        
+                                        if chunk.get("finished", False):
+                                            usage = chunk.get("usage", {})
+                                            if usage:
+                                                st.info(f"📊 本次消耗Token: {usage.get('total_tokens', '未知')} | 完成时间: {datetime.now().strftime('%H:%M:%S')}")
+                                            st.success("✅ 内容改写完成！")
+                                            generated_rewrite = full_content
+                                            break
+                            except Exception as e:
+                                st.error(f"❌ 流式生成异常: {str(e)}")
+                    else:
+                        # 普通生成
+                        with st.spinner("AI正在改写内容..."):
+                            result = call_api("/api/content/rewrite", "POST", data)
                             
-                            with col2:
-                                st.markdown("### 改写后内容：")
-                                st.markdown(result["data"]["rewritten_content"])
-                        else:
-                            st.error(f"改写失败: {result.get('error', '未知错误')}")
-    
-    elif creation_type == "💬 自由对话":
-        st.subheader("💬 AI自由对话")
-        
-        with st.form("free_chat"):
-            prompt = st.text_area("请输入你的问题或需求", placeholder="例如：帮我写一个关于健康饮食的小红书文案...", height=150)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                max_tokens = st.number_input("最大Token数", value=2000, min_value=100, max_value=4000)
-            with col2:
-                temperature = st.slider("创造性 (Temperature)", 0.0, 2.0, 0.7, 0.1)
-            
-            if st.form_submit_button("🚀 发送"):
-                if not prompt:
-                    st.error("请输入内容")
-                else:
-                    with st.spinner("AI正在思考..."):
-                        data = {
-                            "prompt": prompt,
-                            "config_id": selected_config_id,
-                            "max_tokens": max_tokens,
-                            "temperature": temperature
-                        }
-                        
-                        result = call_api("/api/content/generate", "POST", data)
-                        
-                        if result["success"]:
-                            st.success("AI回复：")
-                            st.markdown(result["data"]["content"])
-                            
-                            # 保存为草稿选项
-                            if st.button("💾 保存回复为草稿"):
-                                draft_data = {
-                                    "title": prompt[:50] + "..." if len(prompt) > 50 else prompt,
-                                    "content": result["data"]["content"],
-                                    "category": "AI对话",
-                                    "ai_generated": True
-                                }
+                            if result["success"]:
+                                st.success("✅ 内容改写成功！")
                                 
-                                draft_result = call_api("/api/drafts", "POST", draft_data)
-                                if draft_result["success"]:
-                                    st.success("已保存为草稿！")
-                        else:
-                            st.error(f"生成失败: {result.get('error', '未知错误')}")
+                                # 显示使用统计
+                                if "usage" in result["data"]:
+                                    usage = result["data"]["usage"]
+                                    st.info(f"📊 本次消耗Token: {usage.get('total_tokens', '未知')}")
+                                
+                                col1, col2 = st.columns(2)
+                                with col1:
+                                    st.markdown("### 📄 原始内容：")
+                                    st.markdown(original_content)
+                                
+                                with col2:
+                                    st.markdown("### ✨ 改写结果：")
+                                    st.markdown(result["data"]["rewritten_content"])
+                                    generated_rewrite = result["data"]["rewritten_content"]
+                            else:
+                                st.error(f"❌ 改写失败: {result.get('error', '未知错误')}")
+                                if result.get('status_code'):
+                                    st.error(f"状态码: {result['status_code']}")
+                                
+                                # 显示调试信息
+                                with st.expander("🔍 详细错误信息"):
+                                    st.json(result)
+                    
+                    # 保存改写结果到session state（只在改写成功时）
+                    if generated_rewrite:
+                        st.session_state[f"generated_rewrite_{hash(original_content)}"] = {
+                            "title": f"改写版本 - {original_content[:30]}..." if len(original_content) > 30 else f"改写版本 - {original_content}",
+                            "content": generated_rewrite,
+                            "category": "内容改写",
+                            "platform_type": platform,
+                            "ai_generated": True
+                        }
+        
+        # 表单外部：显示保存草稿按钮（如果有改写结果）
+        for key in st.session_state.keys():
+            if key.startswith("generated_rewrite_"):
+                draft_data = st.session_state[key]
+                save_rewrite_key = f"save_rewrite_{key}"
+                
+                col1, col2 = st.columns([3, 1])
+                with col1:
+                    st.info(f"✨ 改写结果: {draft_data['title']}")
+                with col2:
+                    if st.button("💾 保存为草稿", key=save_rewrite_key):
+                        with st.spinner("正在保存草稿..."):
+                            draft_result = call_api("/api/drafts", "POST", draft_data)
+                            if draft_result["success"]:
+                                st.success("✅ 已保存为草稿！")
+                                st.info(f"草稿ID: {draft_result['data'].get('id', '未知')}")
+                                # 保存成功后移除session state
+                                del st.session_state[key]
+                                st.rerun()
+                            else:
+                                st.error(f"❌ 保存失败: {draft_result.get('error', '未知错误')}")
+                                if draft_result.get('status_code'):
+                                    st.error(f"状态码: {draft_result['status_code']}")
+                break  # 只显示最新的一个
+    
+
+    
+
 
 
 # 草稿管理页面
@@ -424,7 +768,7 @@ elif page == "📝 草稿管理":
     with col2:
         status_filter = st.selectbox("状态筛选", ["全部", "draft", "published", "deleted"])
     with col3:
-        if st.button("📝 新建草稿"):
+        if st.button("📝 新建草稿", key="new_draft_btn"):
             st.session_state.show_new_draft = True
     
     # 新建草稿表单
@@ -530,11 +874,11 @@ elif page == "📝 草稿管理":
                     
                     col1, col2 = st.columns(2)
                     with col1:
-                        if st.button("❌ 关闭"):
+                        if st.button("❌ 关闭", key="close_draft_detail"):
                             del st.session_state.view_draft_id
                             st.rerun()
                     with col2:
-                        if st.button("🗑️ 删除草稿"):
+                        if st.button("🗑️ 删除草稿", key="delete_draft_btn"):
                             delete_result = call_api(f"/api/drafts/{draft_id}", "DELETE")
                             if delete_result["success"]:
                                 st.success("草稿已删除")
@@ -648,7 +992,7 @@ elif page == "🚀 发布管理":
                         publish_time = datetime.datetime.combine(publish_date, publish_time_input).isoformat()
                     
                     # 发布按钮
-                    if st.button("🚀 开始发布", type="primary"):
+                    if st.button("🚀 开始发布", type="primary", key="start_publish_btn"):
                         publish_data = {
                             "draft_id": selected_draft_id,
                             "platforms": selected_platforms,
@@ -1128,7 +1472,7 @@ elif page == "🔥 热点分析":
                     selected_platforms.append(platform['platform'])
             
             # 抓取按钮
-            if st.button("🚀 开始抓取", type="primary"):
+            if st.button("🚀 开始抓取", type="primary", key="start_crawl_btn"):
                 if selected_platforms:
                     with st.spinner("正在抓取热点数据..."):
                         crawl_data = selected_platforms if selected_platforms else None
@@ -1172,7 +1516,7 @@ elif page == "🔥 热点分析":
             with col1:
                 cleanup_days = st.selectbox("清理天数", [3, 7, 14, 30], index=1)
             with col2:
-                if st.button("🗑️ 清理旧数据"):
+                if st.button("🗑️ 清理旧数据", key="cleanup_data_btn"):
                     with st.spinner("正在清理数据..."):
                         cleanup_result = call_api(f"/api/hotspot/cleanup?days={cleanup_days}", "DELETE")
                         
@@ -1416,7 +1760,7 @@ elif page == "📊 使用统计":
         
         days_filter = st.selectbox("报告时间范围", [7, 15, 30, 60], index=2, format_func=lambda x: f"最近{x}天", key="report_days")
         
-        if st.button("生成综合报告", type="primary"):
+        if st.button("生成综合报告", type="primary", key="generate_report_btn"):
             with st.spinner("正在生成综合报告..."):
                 report_result = call_api(f"/api/analytics/report?days={days_filter}")
                 

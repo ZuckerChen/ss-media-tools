@@ -4,10 +4,11 @@ FastAPI后端主文件
 """
 from fastapi import FastAPI, Depends, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 import uvicorn
+import json
 from sqlalchemy.orm import Session
 from contextlib import asynccontextmanager
 
@@ -49,26 +50,19 @@ class ContentGenerateRequest(BaseModel):
     temperature: Optional[float] = None
 
 
-class TitleGenerateRequest(BaseModel):
-    topic: str
-    platform: str = "通用"
-    style: str = "专业"
-    requirements: str = ""
-    config_id: Optional[int] = None
 
-
-class OutlineGenerateRequest(BaseModel):
-    title: str
-    platform: str = "通用"
-    audience: str = "通用受众"
-    length: str = "中等长度"
-    config_id: Optional[int] = None
 
 
 class ContentRewriteRequest(BaseModel):
     original_content: str
-    requirements: str = "改写为更吸引人的版本"
+    rewrite_type: str = "风格转换"
+    rewrite_strength: str = "中度"
     platform: str = "通用"
+    audience: str = "通用受众"
+    style: str = "专业"
+    length_requirement: str = "保持原长度"
+    keywords: str = ""
+    requirements: str = ""
     config_id: Optional[int] = None
 
 
@@ -99,6 +93,18 @@ class ContentCheckRequest(BaseModel):
     title: str
     content: str
     platform: str
+
+
+# 新增综合创作请求模型
+class ComprehensiveCreationRequest(BaseModel):
+    topic: str
+    platform: str = "通用"
+    style: str = "专业"
+    audience: str = "通用受众"
+    length: str = "中等长度"
+    keywords: str = ""
+    requirements: str = ""
+    config_id: Optional[int] = None
 
 
 # 应用启动和关闭事件
@@ -242,72 +248,163 @@ async def generate_content(request: ContentGenerateRequest, db: Session = Depend
     }
 
 
-@app.post("/api/content/title", summary="生成标题")
-async def generate_title(request: TitleGenerateRequest, db: Session = Depends(get_db)):
-    """生成吸引人的标题"""
+@app.post("/api/content/generate/stream", summary="流式生成内容")
+async def generate_content_stream(request: ContentGenerateRequest, db: Session = Depends(get_db)):
+    """使用AI流式生成内容"""
+    def stream_generator():
+        manager = AIModelManager(db)
+        
+        for chunk in manager.generate_content_stream(
+            prompt=request.prompt,
+            config_id=request.config_id,
+            max_tokens=request.max_tokens,
+            temperature=request.temperature
+        ):
+            # 将chunk转换为SSE格式
+            data = json.dumps(chunk, ensure_ascii=False)
+            yield f"data: {data}\n\n"
+        
+        # 发送结束标记
+        yield "data: [DONE]\n\n"
+    
+    return StreamingResponse(
+        stream_generator(),
+        media_type="text/plain",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "Content-Type": "text/plain; charset=utf-8"
+        }
+    )
+
+
+
+
+
+# 新增综合创作API端点
+@app.post("/api/content/comprehensive", summary="综合创作 - 生成标题+正文+标签")
+async def create_comprehensive_content(request: ComprehensiveCreationRequest, db: Session = Depends(get_db)):
+    """基于主题一次性生成完整内容方案（标题+正文+标签）"""
     manager = AIModelManager(db)
     
-    prompt = PromptTemplates.TITLE_GENERATION.format(
+    # 构建综合创作提示词
+    prompt = PromptTemplates.COMPREHENSIVE_CREATION.format(
         topic=request.topic,
         platform=request.platform,
         style=request.style,
-        requirements=request.requirements or "生成吸引人的标题"
+        audience=request.audience,
+        length=request.length,
+        keywords=request.keywords,
+        requirements=request.requirements
     )
     
-    result = manager.generate_content(prompt, request.config_id)
-    
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
-    
-    return {
-        "titles": result["content"],
-        "usage": result.get("usage")
-    }
+    try:
+        result = manager.generate_content(prompt, request.config_id)
+        return {
+            "content": result["content"],
+            "usage": result.get("usage", {}),
+            "success": True
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"综合创作失败: {str(e)}")
 
 
-@app.post("/api/content/outline", summary="生成内容大纲")
-async def generate_outline(request: OutlineGenerateRequest, db: Session = Depends(get_db)):
-    """生成内容大纲"""
+# 新增综合创作流式API端点
+@app.post("/api/content/comprehensive/stream", summary="流式综合创作 - 生成标题+正文+标签")
+async def create_comprehensive_content_stream(request: ComprehensiveCreationRequest, db: Session = Depends(get_db)):
+    """流式综合创作 - 实时生成完整内容方案"""
     manager = AIModelManager(db)
     
-    prompt = PromptTemplates.CONTENT_OUTLINE.format(
-        title=request.title,
+    # 构建综合创作提示词
+    prompt = PromptTemplates.COMPREHENSIVE_CREATION.format(
+        topic=request.topic,
         platform=request.platform,
+        style=request.style,
         audience=request.audience,
-        length=request.length
+        length=request.length,
+        keywords=request.keywords,
+        requirements=request.requirements
     )
     
-    result = manager.generate_content(prompt, request.config_id)
+    def stream_generator():
+        try:
+            for chunk in manager.generate_content_stream(prompt, request.config_id):
+                # 统一输出格式
+                if "error" in chunk:
+                    yield f"data: {json.dumps({'error': chunk['error']})}\n\n"
+                else:
+                    yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            yield f"data: [DONE]\n\n"
     
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
-    
-    return {
-        "outline": result["content"],
-        "usage": result.get("usage")
-    }
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
+# 更新内容改写API端点
 @app.post("/api/content/rewrite", summary="内容改写")
 async def rewrite_content(request: ContentRewriteRequest, db: Session = Depends(get_db)):
     """改写内容"""
     manager = AIModelManager(db)
     
+    # 构建改写提示词
     prompt = PromptTemplates.CONTENT_REWRITE.format(
         original_content=request.original_content,
-        requirements=request.requirements,
-        platform=request.platform
+        rewrite_type=request.rewrite_type,
+        rewrite_strength=request.rewrite_strength,
+        platform=request.platform,
+        audience=request.audience,
+        style=request.style,
+        length_requirement=request.length_requirement,
+        keywords=request.keywords,
+        requirements=request.requirements
     )
     
-    result = manager.generate_content(prompt, request.config_id)
+    try:
+        result = manager.generate_content(prompt, request.config_id)
+        return {
+            "rewritten_content": result["content"],
+            "usage": result.get("usage", {}),
+            "success": True
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"内容改写失败: {str(e)}")
+
+
+# 更新内容改写流式API端点
+@app.post("/api/content/rewrite/stream", summary="流式内容改写")
+async def rewrite_content_stream(request: ContentRewriteRequest, db: Session = Depends(get_db)):
+    """流式内容改写"""
+    manager = AIModelManager(db)
     
-    if not result["success"]:
-        raise HTTPException(status_code=400, detail=result["error"])
+    # 构建改写提示词
+    prompt = PromptTemplates.CONTENT_REWRITE.format(
+        original_content=request.original_content,
+        rewrite_type=request.rewrite_type,
+        rewrite_strength=request.rewrite_strength,
+        platform=request.platform,
+        audience=request.audience,
+        style=request.style,
+        length_requirement=request.length_requirement,
+        keywords=request.keywords,
+        requirements=request.requirements
+    )
     
-    return {
-        "rewritten_content": result["content"],
-        "usage": result.get("usage")
-    }
+    def stream_generator():
+        try:
+            for chunk in manager.generate_content_stream(prompt, request.config_id):
+                # 统一输出格式
+                if "error" in chunk:
+                    yield f"data: {json.dumps({'error': chunk['error']})}\n\n"
+                else:
+                    yield f"data: {json.dumps(chunk)}\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'error': str(e)})}\n\n"
+        finally:
+            yield f"data: [DONE]\n\n"
+    
+    return StreamingResponse(stream_generator(), media_type="text/plain")
 
 
 # 草稿管理相关API

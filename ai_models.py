@@ -25,6 +25,11 @@ class BaseAIModel(ABC):
         pass
     
     @abstractmethod
+    def generate_text_stream(self, prompt: str, **kwargs):
+        """流式生成文本"""
+        pass
+    
+    @abstractmethod
     def test_connection(self) -> bool:
         """测试连接"""
         pass
@@ -72,6 +77,46 @@ class OpenAIModel(BaseAIModel):
                 "error": str(e),
                 "content": None
             }
+    
+    def generate_text_stream(self, prompt: str, **kwargs):
+        """流式生成文本"""
+        try:
+            response = openai.ChatCompletion.create(
+                model=self.config.model_name or "gpt-3.5-turbo",
+                messages=[
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=kwargs.get('max_tokens', self.config.max_tokens),
+                temperature=kwargs.get('temperature', self.config.temperature),
+                n=kwargs.get('n', 1),
+                stop=kwargs.get('stop'),
+                stream=True
+            )
+            
+            content = ""
+            for chunk in response:
+                if hasattr(chunk, 'choices') and len(chunk.choices) > 0:
+                    delta = chunk.choices[0].delta
+                    if hasattr(delta, 'content') and delta.content:
+                        chunk_content = delta.content
+                        content += chunk_content
+                        yield {
+                            "success": True,
+                            "content": chunk_content,
+                            "full_content": content,
+                            "finished": False
+                        }
+            
+            # 流式生成完成
+            yield {
+                "success": True,
+                "content": "",
+                "full_content": content,
+                "finished": True
+            }
+            
+        except Exception as e:
+            yield {"error": str(e)}
     
     def test_connection(self) -> bool:
         """测试连接"""
@@ -143,6 +188,44 @@ class BaiduModel(BaseAIModel):
         except Exception as e:
             return {"success": False, "error": str(e), "content": None}
     
+    def generate_text_stream(self, prompt: str, **kwargs):
+        """流式生成文本（模拟流式，因为百度API不支持真正的流式）"""
+        try:
+            # 百度API不支持真正的流式，所以我们模拟流式输出
+            result = self.generate_text(prompt, **kwargs)
+            
+            if not result["success"]:
+                yield {"error": result.get("error", "生成失败")}
+                return
+            
+            content = result["content"]
+            
+            # 模拟逐字符流式输出
+            import time
+            current_content = ""
+            for i, char in enumerate(content):
+                current_content += char
+                yield {
+                    "success": True,
+                    "content": char,
+                    "full_content": current_content,
+                    "finished": False
+                }
+                # 短暂延迟模拟流式效果
+                time.sleep(0.01)
+            
+            # 流式生成完成
+            yield {
+                "success": True,
+                "content": "",
+                "full_content": content,
+                "finished": True,
+                "usage": result.get("usage", {})
+            }
+            
+        except Exception as e:
+            yield {"error": str(e)}
+    
     def test_connection(self) -> bool:
         """测试连接"""
         result = self.generate_text("测试", max_tokens=10)
@@ -180,6 +263,44 @@ class DashScopeModel(BaseAIModel):
                 }
         except Exception as e:
             return {"success": False, "error": str(e), "content": None}
+    
+    def generate_text_stream(self, prompt: str, **kwargs):
+        """流式生成文本（模拟流式，因为通义千问API可能不支持真正的流式）"""
+        try:
+            # 通义千问API不支持真正的流式，所以我们模拟流式输出
+            result = self.generate_text(prompt, **kwargs)
+            
+            if not result["success"]:
+                yield {"error": result.get("error", "生成失败")}
+                return
+            
+            content = result["content"]
+            
+            # 模拟逐字符流式输出
+            import time
+            current_content = ""
+            for i, char in enumerate(content):
+                current_content += char
+                yield {
+                    "success": True,
+                    "content": char,
+                    "full_content": current_content,
+                    "finished": False
+                }
+                # 短暂延迟模拟流式效果
+                time.sleep(0.01)
+            
+            # 流式生成完成
+            yield {
+                "success": True,
+                "content": "",
+                "full_content": content,
+                "finished": True,
+                "usage": result.get("usage", {})
+            }
+            
+        except Exception as e:
+            yield {"error": str(e)}
     
     def test_connection(self) -> bool:
         """测试连接"""
@@ -247,6 +368,72 @@ class DeepSeekModel(BaseAIModel):
                 "error": str(e),
                 "content": None
             }
+    
+    def generate_text_stream(self, prompt: str, **kwargs):
+        """流式生成文本"""
+        try:
+            headers = {
+                "Content-Type": "application/json", 
+                "Authorization": f"Bearer {self.config.api_key}"
+            }
+            
+            payload = {
+                "model": self.config.model_name or "deepseek-chat",
+                "messages": [
+                    {"role": "user", "content": prompt}
+                ],
+                "max_tokens": kwargs.get('max_tokens', self.config.max_tokens),
+                "temperature": kwargs.get('temperature', self.config.temperature),
+                "stream": True
+            }
+            
+            response = requests.post(
+                f"{self.base_url}/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                stream=True,
+                timeout=60
+            )
+            
+            if response.status_code != 200:
+                yield {"error": f"HTTP {response.status_code}: {response.text}"}
+                return
+            
+            content = ""
+            for line in response.iter_lines():
+                if line:
+                    line = line.decode('utf-8')
+                    if line.startswith('data: '):
+                        data = line[6:]  # 移除 'data: ' 前缀
+                        if data.strip() == '[DONE]':
+                            break
+                        
+                        try:
+                            chunk = json.loads(data)
+                            if 'choices' in chunk and len(chunk['choices']) > 0:
+                                delta = chunk['choices'][0].get('delta', {})
+                                if 'content' in delta:
+                                    chunk_content = delta['content']
+                                    content += chunk_content
+                                    yield {
+                                        "success": True,
+                                        "content": chunk_content,
+                                        "full_content": content,
+                                        "finished": False
+                                    }
+                        except json.JSONDecodeError:
+                            continue
+            
+            # 流式生成完成
+            yield {
+                "success": True,
+                "content": "",
+                "full_content": content,
+                "finished": True
+            }
+            
+        except Exception as e:
+            yield {"error": str(e)}
     
     def test_connection(self) -> bool:
         """测试连接"""
@@ -325,6 +512,82 @@ class AIModelManager:
         self.db.commit()
         
         return result
+    
+    def generate_content_stream(self, prompt: str, config_id: Optional[int] = None, **kwargs):
+        """流式生成内容"""
+        model = self.get_model(config_id)
+        if not model:
+            yield {"error": "未找到可用的AI模型"}
+            return
+        
+        # 记录开始时间
+        start_time = time.time()
+        
+        try:
+            for chunk in model.generate_text_stream(prompt, **kwargs):
+                if "error" in chunk:
+                    # 记录错误日志
+                    log = SystemLog(
+                        level="ERROR",
+                        module="ai_models",
+                        message=f"AI流式生成失败 - 模型: {model.config.name}",
+                        details={
+                            "config_id": model.config.id,
+                            "prompt_length": len(prompt),
+                            "error": chunk["error"]
+                        }
+                    )
+                    self.db.add(log)
+                    self.db.commit()
+                    yield chunk
+                    return
+                
+                yield chunk
+                
+                # 如果是最后一个chunk，更新使用统计
+                if chunk.get("finished", False):
+                    end_time = time.time()
+                    model.config.usage_count += 1
+                    if "usage" in chunk:
+                        usage = chunk["usage"]
+                        if "total_tokens" in usage:
+                            model.config.total_tokens += usage["total_tokens"]
+                    self.db.commit()
+                    
+                    # 记录成功日志
+                    log = SystemLog(
+                        level="INFO",
+                        module="ai_models",
+                        message=f"AI流式生成完成 - 模型: {model.config.name}",
+                        details={
+                            "config_id": model.config.id,
+                            "prompt_length": len(prompt),
+                            "success": True,
+                            "response_time": end_time - start_time,
+                            "content_length": len(chunk.get("full_content", "")),
+                            "usage": chunk.get("usage")
+                        }
+                    )
+                    self.db.add(log)
+                    self.db.commit()
+                    
+        except Exception as e:
+            # 记录异常日志
+            end_time = time.time()
+            log = SystemLog(
+                level="ERROR",
+                module="ai_models",
+                message=f"AI流式生成异常 - 模型: {model.config.name}",
+                details={
+                    "config_id": model.config.id,
+                    "prompt_length": len(prompt),
+                    "error": str(e),
+                    "response_time": end_time - start_time
+                }
+            )
+            self.db.add(log)
+            self.db.commit()
+            yield {"error": str(e)}
     
     def list_configs(self) -> List[AIModelConfig]:
         """列出所有AI模型配置"""
@@ -422,56 +685,73 @@ class AIModelManager:
 class PromptTemplates:
     """提示词模板"""
     
-    TITLE_GENERATION = """
-你是一个专业的新媒体内容创作专家，请根据以下主题和要求生成吸引人的标题：
+    COMPREHENSIVE_CREATION = """
+你是一个专业的新媒体内容创作专家，请根据以下主题和要求，一次性生成完整的内容方案：
 
 主题：{topic}
 平台：{platform}
 风格：{style}
-要求：{requirements}
-
-请生成5个不同风格的标题，每个标题都要：
-1. 吸引眼球，激发点击欲望
-2. 符合{platform}平台的特点
-3. 字数控制在适当范围内
-4. 避免标题党，内容要有价值
-
-格式：请按编号列出5个标题
-"""
-    
-    CONTENT_OUTLINE = """
-你是一个专业的内容策划师，请为以下标题制作详细的内容大纲：
-
-标题：{title}
-平台：{platform}
 目标受众：{audience}
 内容长度：{length}
+关键字：{keywords}
+特殊要求：{requirements}
 
-请创建一个结构清晰的内容大纲，包括：
-1. 开头（吸引注意力）
-2. 主体内容（3-5个要点）
-3. 结尾（总结和行动号召）
+请按以下格式生成完整的内容方案：
 
-要求：
-- 逻辑清晰，层次分明
-- 每个部分都要有具体的内容提示
-- 符合{platform}平台的内容特点
-- 能够引起{audience}的共鸣
+【标题】
+生成3个不同风格的标题选项，每个标题都要：
+- 吸引眼球，激发点击欲望
+- 符合{platform}平台的特点
+- 包含关键字：{keywords}
+- 避免标题党，内容要有价值
+
+【正文】
+创建一篇完整的{length}内容，包括：
+- 开头：吸引注意力的引言
+- 主体：3-5个核心观点，每个观点要有具体例子或论据
+- 结尾：总结和行动号召
+- 确保内容符合{style}风格
+- 自然融入关键字：{keywords}
+- 针对{audience}的兴趣点
+
+【推荐标签】
+推荐5-8个相关的标签（hashtag），要求：
+- 与主题高度相关
+- 符合{platform}平台习惯
+- 包含热门和细分标签的组合
+- 有助于内容传播和发现
+
+请确保整个内容方案连贯统一，标题、正文和标签都围绕同一个主题展开。
 """
     
     CONTENT_REWRITE = """
 你是一个专业的内容编辑，请对以下内容进行改写，保持核心观点不变但改变表达方式：
 
 原内容：{original_content}
-改写要求：{requirements}
+改写类型：{rewrite_type}
+改写强度：{rewrite_strength}
 目标平台：{platform}
+目标受众：{audience}
+风格要求：{style}
+长度要求：{length_requirement}
+关键字：{keywords}
+特殊要求：{requirements}
 
 改写要求：
 1. 保持原文的核心观点和主要信息
-2. 改变句式结构和表达方式
-3. 确保内容的原创性
-4. 符合{platform}平台的风格
-5. 保持内容的可读性和吸引力
+2. 根据改写类型调整：
+   - 风格转换：改变语言风格和表达方式
+   - 平台适配：调整为适合{platform}平台的格式
+   - 受众调整：针对{audience}重新组织内容
+   - 长度调整：根据{length_requirement}调整内容长度
+3. 改写强度：
+   - 轻度：保持原文结构，主要改变用词和句式
+   - 中度：调整段落结构，重新组织内容
+   - 重度：完全重写，仅保留核心观点
+4. 确保内容的原创性和可读性
+5. 符合{platform}平台的风格特点
+6. 自然融入关键字：{keywords}
+7. 针对{audience}的阅读习惯和兴趣点
 
 请提供改写后的内容：
 """ 
